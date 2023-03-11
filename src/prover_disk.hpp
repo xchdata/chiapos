@@ -25,6 +25,7 @@
 #include <future>
 #include <iostream>
 #include <mutex>
+#include <optional>
 #include <string>
 #include <utility>
 #include <vector>
@@ -330,7 +331,7 @@ public:
             for (uint64_t position : p7_entries) {
                 // This inner loop goes from table 6 to table 1, getting the two backpointers,
                 // and following one of them.
-                uint64_t alt_position;
+                std::optional<uint64_t> alt_position;
                 for (uint8_t table_index = 6; table_index > GetEndTable(); table_index--) {
                     uint128_t line_point = ReadLinePoint(disk_file, table_index, position);
 
@@ -355,7 +356,8 @@ public:
                     req.xLinePoints[0].hi = (uint64_t)(new_line_point >> 64);
                     req.xLinePoints[0].lo = (uint64_t)new_line_point;
                     if (compression_level >= 6) {
-                        uint128_t alt_line_point = ReadLinePoint(disk_file, GetEndTable(), alt_position);
+                        assert(alt_position.has_value());
+                        uint128_t alt_line_point = ReadLinePoint(disk_file, GetEndTable(), alt_position.value());
                         req.xLinePoints[1].hi = (uint64_t)(alt_line_point >> 64);
                         req.xLinePoints[1].lo = (uint64_t)alt_line_point;
                     }
