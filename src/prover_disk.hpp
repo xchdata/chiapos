@@ -307,8 +307,6 @@ public:
     {
         std::vector<LargeBits> qualities;
 
-        uint32_t p7_entries_size = 0;
-
         {
             std::lock_guard<std::mutex> l(_mtx);
             std::ifstream disk_file(filename, std::ios::in | std::ios::binary);
@@ -324,7 +322,6 @@ public:
             if (p7_entries.empty()) {
                 return std::vector<LargeBits>();
             }
-            p7_entries_size = p7_entries.size();
 
             // The last 5 bits of the challenge determine which route we take to get to
             // our two x values in the leaves.
