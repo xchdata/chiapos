@@ -201,7 +201,7 @@ namespace Util {
         return bswap_64(i);
     }
 
-    static void IntTo16Bytes(uint8_t *result, const uint128_t input)
+    inline void IntTo16Bytes(uint8_t *result, const uint128_t input)
     {
         uint64_t r = bswap_64(input >> 64);
         memcpy(result, &r, sizeof(r));
