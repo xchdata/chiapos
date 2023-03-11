@@ -306,10 +306,11 @@ public:
     // values, which are in different parts of the disk.
     std::vector<LargeBits> GetQualitiesForChallenge(const uint8_t* challenge)
     {
-        std::vector<LargeBits> qualities;
+        std::lock_guard<std::mutex> l(_mtx);
+
+        std::vector<std::pair<uint128_t, std::optional<uint128_t>>> line_points;
 
         {
-            std::lock_guard<std::mutex> l(_mtx);
             std::ifstream disk_file(filename, std::ios::in | std::ios::binary);
 
             if (!disk_file.is_open()) {
@@ -347,47 +348,64 @@ public:
                     }
                 }
                 uint128_t new_line_point = ReadLinePoint(disk_file, GetEndTable(), position);
-                std::pair<uint64_t, uint64_t> x1x2;
-                if (compression_level > 0) {
-                    GRCompressedQualitiesRequest req;
-                    req.compressionLevel = compression_level;
-                    req.plotId = id.data();
-                    req.challenge = challenge;
-                    req.xLinePoints[0].hi = (uint64_t)(new_line_point >> 64);
-                    req.xLinePoints[0].lo = (uint64_t)new_line_point;
-                    if (compression_level >= 6) {
-                        assert(alt_position.has_value());
-                        uint128_t alt_line_point = ReadLinePoint(disk_file, GetEndTable(), alt_position.value());
-                        req.xLinePoints[1].hi = (uint64_t)(alt_line_point >> 64);
-                        req.xLinePoints[1].lo = (uint64_t)alt_line_point;
-                    }
-
-                    GreenReaperContext* gr = decompresser_context_queue.pop();
-                    assert(gr);
-
-                    auto res = grGetFetchQualitiesXPair(gr, &req);
-                    decompresser_context_queue.push(gr);
-
-                    if (res != GRResult_OK) {
-                        // Expect this will result in failure in a later step.
-                        x1x2.first = x1x2.second = 0;
-                    } else {
-                        x1x2.first = req.x1;
-                        x1x2.second = req.x2;
-                    }
-                } else {
-                    x1x2 = Encoding::LinePointToSquare(new_line_point);
+                std::optional<uint128_t> alt_line_point;
+                if (compression_level >= 6) {
+                    assert(alt_position.has_value());
+                    alt_line_point = ReadLinePoint(disk_file, GetEndTable(), alt_position.value());
                 }
-                // The final two x values (which are stored in the same location) are hashed
-                std::vector<unsigned char> hash_input(32 + Util::ByteAlign(2 * k) / 8, 0);
-                memcpy(hash_input.data(), challenge, 32);
-                (LargeBits(x1x2.second, k) + LargeBits(x1x2.first, k))
-                    .ToBytes(hash_input.data() + 32);
-                std::vector<unsigned char> hash(picosha2::k_digest_size);
-                picosha2::hash256(hash_input.begin(), hash_input.end(), hash.begin(), hash.end());
-                qualities.emplace_back(hash.data(), 32, 256);
+                line_points.emplace_back(new_line_point, alt_line_point);
             }
         }  // Scope for disk_file
+
+        std::vector<std::pair<uint64_t, uint64_t>> x1x2s;
+        x1x2s.reserve(line_points.size());
+
+        for (const auto& [new_line_point, alt_line_point] : line_points) {
+            std::pair<uint64_t, uint64_t> x1x2;
+            if (compression_level > 0) {
+                GRCompressedQualitiesRequest req;
+                req.compressionLevel = compression_level;
+                req.plotId = id.data();
+                req.challenge = challenge;
+                req.xLinePoints[0].hi = (uint64_t)(new_line_point >> 64);
+                req.xLinePoints[0].lo = (uint64_t)new_line_point;
+                if (compression_level >= 6) {
+                    assert(alt_line_point.has_value());
+                    req.xLinePoints[1].hi = (uint64_t)(alt_line_point.value() >> 64);
+                    req.xLinePoints[1].lo = (uint64_t)alt_line_point.value();
+                }
+
+                GreenReaperContext* gr = decompresser_context_queue.pop();
+                assert(gr);
+                auto res = grGetFetchQualitiesXPair(gr, &req);
+                decompresser_context_queue.push(gr);
+
+                if (res != GRResult_OK) {
+                    // Expect this will result in failure in a later step.
+                    x1x2.first = x1x2.second = 0;
+                } else {
+                    x1x2.first = req.x1;
+                    x1x2.second = req.x2;
+                }
+            } else {
+                x1x2 = Encoding::LinePointToSquare(new_line_point);
+            }
+            x1x2s.emplace_back(x1x2);
+        }
+
+        std::vector<LargeBits> qualities;
+        qualities.reserve(x1x2s.size());
+
+        for (const auto &x1x2 : x1x2s) {
+            // The final two x values (which are stored in the same location) are hashed
+            std::vector<unsigned char> hash_input(32 + Util::ByteAlign(2 * k) / 8, 0);
+            memcpy(hash_input.data(), challenge, 32);
+            (LargeBits(x1x2.second, k) + LargeBits(x1x2.first, k))
+                .ToBytes(hash_input.data() + 32);
+            std::vector<unsigned char> hash(picosha2::k_digest_size);
+            picosha2::hash256(hash_input.begin(), hash_input.end(), hash.begin(), hash.end());
+            qualities.emplace_back(hash.data(), 32, 256);
+        }
 
         return qualities;
     }
